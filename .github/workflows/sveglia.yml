@@ -1,0 +1,33 @@
+name: Sveglia
+# I lavori programmati di GitHub partono in ritardo e spesso saltano (su mama-social ne arrivavano 3 al giorno su 28).
+# Questa sveglia parte presto, aspetta l'orario esatto e lancia Pubblica di mama-social ogni 15 minuti nelle fasce.
+# Sta in questo repo pubblico perché qui i minuti di attesa sono gratis.
+on:
+  schedule:
+    - cron: "0 8 * * *"
+    - cron: "0 13 * * *"
+    - cron: "0 18 * * *"
+  workflow_dispatch:
+concurrency:
+  group: sveglia
+  cancel-in-progress: true
+jobs:
+  sveglia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - run: |
+          export TZ=Atlantic/Canary
+          lancia() { gh workflow run pubblica.yml -R lucazucchiati-source/mama-social && echo "lanciata $(date +%H:%M)"; }
+          fine=$(( $(date +%s) + 340*60 ))
+          lancia   # recupera subito un'uscita già scaduta
+          for h in 12 13 14 18 19 20 21; do
+            for m in 02 17 32 47; do
+              t=$(date -d "today $h:$m" +%s); ora=$(date +%s)
+              [ "$t" -le "$ora" ] && continue
+              [ "$t" -gt "$fine" ] && exit 0
+              sleep $(( t - ora )); lancia || true
+            done
+          done
+        env:
+          GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
