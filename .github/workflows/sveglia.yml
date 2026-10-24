@@ -1,12 +1,13 @@
 name: Sveglia
-# I lavori programmati di GitHub partono in ritardo e spesso saltano (su mama-social ne arrivavano 3 al giorno su 28).
-# Questa sveglia parte presto, aspetta l'orario esatto e lancia Pubblica di mama-social ogni 15 minuti nelle fasce.
+# I lavori programmati di GitHub partono in ritardo e spesso saltano (su mama-social ne arrivavano 3 al giorno su 28;
+# il 24/10 anche questa sveglia delle 08 UTC è partita alle 12:19 UTC, 4 ore tardi).
+# Per questo la sveglia non dipende più dagli orari di GitHub: resta accesa ~5 ore, lancia Pubblica di mama-social
+# ogni 15 minuti nelle fasce, e prima di chiudersi rilancia se stessa (il lancio a mano parte subito).
+# I cron restano solo come riserva se la catena si interrompe.
 # Sta in questo repo pubblico perché qui i minuti di attesa sono gratis.
 on:
   schedule:
-    - cron: "0 8 * * *"
-    - cron: "0 13 * * *"
-    - cron: "0 18 * * *"
+    - cron: "0 */3 * * *"
   workflow_dispatch:
 concurrency:
   group: sveglia
@@ -18,16 +19,27 @@ jobs:
     steps:
       - run: |
           export TZ=Atlantic/Canary
-          lancia() { gh workflow run pubblica.yml -R lucazucchiati-source/mama-social && echo "lanciata $(date +%H:%M)"; }
-          fine=$(( $(date +%s) + 340*60 ))
-          lancia   # recupera subito un'uscita già scaduta
-          for h in 12 13 14 18 19 20 21; do
-            for m in 02 17 32 47; do
-              t=$(date -d "today $h:$m" +%s); ora=$(date +%s)
-              [ "$t" -le "$ora" ] && continue
-              [ "$t" -gt "$fine" ] && exit 0
-              sleep $(( t - ora )); lancia || true
+          lancia() { gh workflow run pubblica.yml -R lucazucchiati-source/mama-social && echo "lanciata $(date '+%d/%m %H:%M')"; }
+          # fasce di pubblicazione (ora delle Canarie): 12-14 e 18-21, ogni 15 minuti
+          prossima() {
+            for g in today tomorrow; do
+              for h in 12 13 14 18 19 20 21; do
+                for m in 02 17 32 47; do
+                  t=$(date -d "$g $h:$m" +%s)
+                  [ "$t" -gt "$(date +%s)" ] && { echo "$t"; return; }
+                done
+              done
             done
+          }
+          fine=$(( $(date +%s) + 330*60 ))
+          h=$(date +%-H)
+          if [ "$h" -ge 12 ] && [ "$h" -le 21 ]; then lancia || true; fi   # recupera un'uscita già scaduta
+          while :; do
+            t=$(prossima)
+            [ "$t" -gt "$fine" ] && break
+            sleep $(( t - $(date +%s) )); lancia || true
           done
+          # passa il turno a una sveglia nuova: così ce n'è sempre una accesa
+          gh workflow run sveglia.yml -R lucazucchiati-source/mama-reels-tmp && echo "sveglia successiva lanciata $(date '+%H:%M')"
         env:
           GH_TOKEN: ${{ secrets.DISPATCH_TOKEN }}
