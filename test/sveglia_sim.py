@@ -56,7 +56,7 @@ USCITE = {'mar 3/11 12:30': ts(2026,11,3,12,30), 'mar 3/11 18:00': ts(2026,11,3,
           'lun 9/11 12:00': ts(2026,11,9,12), 'lun 9/11 12:30': ts(2026,11,9,12,30)}
 FINESTRA = 3 * 3600
 
-def simula(latenza, cron_ritardo=None, fallisci_dopo=None, inizio=INIZIO, giorni=GIORNI, max_turni=100000):
+def simula(latenza, cron_ritardo=None, fallisci_dopo=None, inizio=INIZIO, giorni=GIORNI, max_turni=100000, cron_ogni=10800):
     fine_sim = inizio + giorni * 86400
     with tempfile.TemporaryDirectory() as d:
         oro, reg = os.path.join(d, 'o'), os.path.join(d, 'r')
@@ -67,9 +67,9 @@ def simula(latenza, cron_ritardo=None, fallisci_dopo=None, inizio=INIZIO, giorni
         def prossimo_cron(t):
             if cron_ritardo is None:
                 return None
-            c = t // 10800 * 10800 + cron_ritardo
+            c = t // cron_ogni * cron_ogni + cron_ritardo
             while c <= t:
-                c += 10800
+                c += cron_ogni
             return c
         vivo = True; t = inizio
         while t < fine_sim and turni < max_turni:
@@ -88,6 +88,7 @@ def simula(latenza, cron_ritardo=None, fallisci_dopo=None, inizio=INIZIO, giorni
             if c is None:
                 vivo = False; break
             crons_usati += 1; t = c
+        fallita = os.path.exists(reg + '.fallita')
         ev = [x.split() for x in open(reg).read().split('\n') if x]
     pub = sorted(int(v) for k, v in ev if k == 'pubblica')
     sv = sum(1 for k, _ in ev if k == 'sveglia')
@@ -106,14 +107,16 @@ def simula(latenza, cron_ritardo=None, fallisci_dopo=None, inizio=INIZIO, giorni
             dopo = [p for p in pub if p >= q]
             ritardi[nome] = (dopo[0] - q) if dopo else None
     return dict(turni=turni, cancellati=cancellati, rilanci_al_giorno=round(sv / giorni, 1), max_durata_min=max(durate) // 60,
-                buchi=buchi, ritardi=ritardi, vivo=vivo, pubblica_lanci=len(pub))
+                buchi=buchi, ritardi=ritardi, vivo=vivo, pubblica_lanci=len(pub), fallita=fallita, crons_usati=crons_usati)
 
-def stampa(nome, r):
+def stampa(nome, r, deve_fallire=False):
     peggiore = max((v if v is not None else 10**9) for v in r['ritardi'].values()) if r['ritardi'] else 0
     ok = not r['buchi'] and peggiore <= FINESTRA and r['max_durata_min'] <= 350
+    if deve_fallire:  # lo scenario vale solo se il rilancio è fallito davvero e la catena è ripartita dal cron
+        ok = ok and r['fallita'] and r['crons_usati'] == 1
     print(f"{'OK ' if ok else 'KO '} {nome}: turni {r['turni']} (cancellati {r['cancellati']}), rilanci/giorno {r['rilanci_al_giorno']}, "
           f"turno più lungo {r['max_durata_min']} min, lanci Pubblica {r['pubblica_lanci']}, fasce scoperte {len(r['buchi'])}, "
-          f"ritardo massimo uscita {peggiore // 60} min")
+          f"ritardo massimo uscita {peggiore // 60} min, rilancio fallito {'sì' if r['fallita'] else 'no'}, ripartenze dal cron {r['crons_usati']}")
     if r['ritardi']:
         print('     lun 9/11 12:00 →', r['ritardi'].get('lun 9/11 12:00'), 's; sab 7/11 11:30 →', r['ritardi'].get('sab 7/11 11:30'), 's')
     return ok
@@ -125,8 +128,11 @@ if __name__ == '__main__':
                      ('catena sola, latenza 5 min', dict(latenza=300)),
                      ('catena + cron puntuali', dict(latenza=30, cron_ritardo=0)),
                      ('catena + cron in ritardo di 40 min', dict(latenza=30, cron_ritardo=2400)),
-                     ('rilancio fallito il 8/11 alle 22, si riprende col cron', dict(latenza=30, cron_ritardo=2400, fallisci_dopo=ts(2026,11,8,22)))]:
+                     ]:
         tutto &= stampa(nome, simula(**kw))
+    # Cron ogni 7 ore, più rado del turno da 5,5 ore: un cron più fitto cancellerebbe ogni turno prima del rilancio e il fallimento non scatterebbe mai.
+    tutto &= stampa('rilancio fallito il 8/11 alle 22, cron ogni 7 ore: si riprende col cron',
+                    simula(latenza=30, cron_ritardo=0, cron_ogni=7 * 3600, fallisci_dopo=ts(2026,11,8,22)), deve_fallire=True)
     for ore in range(0, 24, 3):
         r = simula(latenza=20, inizio=INIZIO + ore * 3600 + 7 * 60, giorni=3)
         tutto &= stampa(f'partenza alle {ore:02d}:07', r)
