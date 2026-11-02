@@ -36,7 +36,13 @@ jobs:
           if [ "$h" -ge 12 ] && [ "$h" -le 21 ]; then lancia || true; fi   # recupera un'uscita già scaduta
           while :; do
             t=$(prossima)
-            [ "$t" -gt "$fine" ] && break
+            if [ "$t" -gt "$fine" ]; then
+              # la prossima fascia è oltre questo turno: si aspetta la fine del turno. Rilanciarsi subito
+              # creava una catena di lanci ogni 7-8 secondi per tutta la notte (251 tra le 06:00 e le 06:32 del 1/11).
+              resto=$(( fine - $(date +%s) ))
+              if [ "$resto" -gt 0 ]; then sleep "$resto"; fi
+              break
+            fi
             sleep $(( t - $(date +%s) )); lancia || true
           done
           # passa il turno a una sveglia nuova: così ce n'è sempre una accesa
